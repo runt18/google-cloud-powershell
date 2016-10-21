@@ -1,4 +1,4 @@
-﻿using Google.Apis.Logging.v2;
+using Google.Apis.Logging.v2;
 using Google.Apis.Logging.v2.Data;
 using Google.PowerShell.Common;
 using System;
