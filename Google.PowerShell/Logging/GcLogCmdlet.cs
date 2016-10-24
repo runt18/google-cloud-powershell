@@ -56,6 +56,7 @@ namespace Google.PowerShell.Logging
 
         protected override void ProcessRecord()
         {
+            string projectPrefixString = $"projects/{Project}";
             ListLogEntriesRequest logEntriesRequest = new ListLogEntriesRequest();
             // Set resource to "projects/{Project}" so we will only find log entries in project Project.
             logEntriesRequest.ResourceNames = new List<string> { $"projects/{Project}" };
