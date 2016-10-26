@@ -10,6 +10,60 @@ using System.Management.Automation;
 
 namespace Google.PowerShell.Logging
 {
+    /// <summary>
+    /// Enum of severity levels for a log entry.
+    /// </summary>
+    public enum LogSeverity
+    {
+        /// <summary>
+        /// The log entry has no assigned severity level.
+        /// </summary>
+        Default,
+
+        /// <summary>
+        /// Debug or trace information.
+        /// </summary>
+        Debug,
+
+        /// <summary>
+        /// Routine information, such as ongoing status or performance.
+        /// </summary>
+        Info,
+
+        /// <summary>
+        /// Normal but significant events, such as start up, shut down, or a configuration change.
+        /// </summary>
+        Notice,
+
+        /// <summary>
+        /// Warning events might cause problems.
+        /// </summary>
+        Warning,
+
+        /// <summary>
+        /// Error events are likely to cause problems.
+        /// </summary>
+        Error,
+
+        /// <summary>
+        /// Critical events cause more severe problems or outages.
+        /// </summary>
+        Critical,
+
+        /// <summary>
+        /// A person must take an action immediately.
+        /// </summary>
+        Alert,
+
+        /// <summary>
+        /// One or more systems are unusable.
+        /// </summary>
+        Emergency
+    }
+
+    /// <summary>
+    /// Base class for Stackdriver Logging cmdlets.
+    /// </summary>
     public class GcLogCmdlet : GCloudCmdlet
     {
         public LoggingService Service { get; private set; }
@@ -30,19 +84,107 @@ namespace Google.PowerShell.Logging
             }
             return logName;
         }
+
+        /// <summary>
+        /// Converts a hashtable to a dictionary
+        /// </summary>
+        protected Dictionary<K,V> ConvertToDictionary<K,V>(Hashtable hashTable)
+        {
+            return hashTable.Cast<DictionaryEntry>().ToDictionary(kvp => (K)kvp.Key, kvp => (V)kvp.Value);
+        }
     }
 
-    [Cmdlet(VerbsCommon.Get, "GcLogEntry")]
-    [OutputType(typeof(LogEntry))]
-    public class GetGcLogEntryCmdlet : GcLogCmdlet
+    /// <summary>
+    /// Base class for cmdlet that has -ResourceType parameter with a validated set of values.
+    /// We initialize and cache this set of values.
+    /// </summary>
+    public abstract class GcLogCmdletWithResourceTypeParameter : GcLogCmdlet, IDynamicParameters
     {
+        /// <summary>
+        /// A cache of the list of valid monitored resource descriptors.
+        /// This is used for auto-completion to display possible types of monitored resource.
+        /// </summary>
+        private static Lazy<List<MonitoredResourceDescriptor>> monitoredResourceDescriptors =
+            new Lazy<List<MonitoredResourceDescriptor>>(GetResourceDescriptors);
+
+        /// <summary>
+        /// Gets all possible monitored resource descriptors.
+        /// </summary>
+        private static List<MonitoredResourceDescriptor> GetResourceDescriptors()
+        {
+            List<MonitoredResourceDescriptor> monitoredResourceDescriptors = new List<MonitoredResourceDescriptor>();
+            LoggingService service = new LoggingService(GetBaseClientServiceInitializer());
+            MonitoredResourceDescriptorsResource.ListRequest request = service.MonitoredResourceDescriptors.List();
+            do
+            {
+                ListMonitoredResourceDescriptorsResponse response = request.Execute();
+                if (response.ResourceDescriptors != null)
+                {
+                    monitoredResourceDescriptors.AddRange(response.ResourceDescriptors);
+                }
+                request.PageToken = response.NextPageToken;
+            }
+            while (request.PageToken != null);
+            return monitoredResourceDescriptors;
+        }
+
+        /// <summary>
+        /// Returns a monitored resource descriptor based on a given type.
+        /// </summary>
+        protected MonitoredResourceDescriptor GetResourceDescriptor(string descriptorType)
+        {
+            return monitoredResourceDescriptors.Value.First(
+                descriptor => string.Equals(descriptor.Type.ToLower(), descriptorType.ToLower()));
+        }
+
+        /// <summary>
+        /// Returns all valid resource types.
+        /// </summary>
+        protected string[] AllResourceTypes => monitoredResourceDescriptors.Value.Select(descriptor => descriptor.Type).ToArray();
+
+        /// <summary>
+        /// This will be implemented by child class.
+        /// This is used by PowerShell to generate the dynamic parameters.
+        /// </summary>
+        public abstract object GetDynamicParameters();
+    }
+
+    /// <summary>
+    /// <para type="synopsis">
+    /// Gets log entries.
+    /// </para>
+    /// <para type="description">
+    /// Gets all log entries from a project or gets the entries from a specific log.
+    /// </para>
+    /// <example>
+    /// <code>PS C:\> Get-GcLogEntry</code>
+    /// <para>This command gets all log entries for the default project.</para>
+    /// </example>
+    /// <example>
+    /// <code>PS C:\> Get-GcLogEntry -LogName "my-log"</code>
+    /// <para>This command gets all the log entries from the log named "my-backendservice".</para>
+    /// </example>
+    /// <para type="link" uri="(https://cloud.google.com/logging/docs/view/logs_index)">
+    /// [Log Entries and Logs]
+    /// </para>
+    /// </summary>
+    [Cmdlet(VerbsCommon.Get, "GcLogEntry", DefaultParameterSetName = ParameterSetNames.NoFilter)]
+    [OutputType(typeof(LogEntry))]
+    public class GetGcLogEntryCmdlet : GcLogCmdletWithResourceTypeParameter
+    {
+        private class ParameterSetNames
+        {
+            public const string Filter = "Filter";
+            public const string NoFilter = "NoFilter";
+        }
+
         /// <summary>
         /// <para type="description">
         /// The project to check for log entries. If not set via PowerShell parameter processing, will
         /// default to the Cloud SDK's DefaultProject property.
         /// </para>
         /// </summary>
-        [Parameter]
+        [Parameter(Mandatory = false)]
         [ConfigPropertyName(CloudSdkSettings.CommonProperties.Project)]
         public string Project { get; set; }
 
@@ -51,20 +193,99 @@ namespace Google.PowerShell.Logging
         /// If specified, the cmdlet will only return log entries in the log with the same name.
         /// </para>
         /// </summary>
-        [Parameter]
+        [Parameter(Mandatory = false, ParameterSetName = ParameterSetNames.NoFilter)]
         public string LogName { get; set; }
+
+        /// <summary>
+        /// <para type="description">
+        /// The cmdlet will only return log entries with the specified severity.
+        /// </para>
+        /// </summary>
+        [Parameter(Mandatory = false, ParameterSetName = ParameterSetNames.NoFilter)]
+        public LogSeverity? Severity { get; set; }
+
+        /// <summary>
+        /// <para type="description">
+        /// If specified, the cmdlet will use this to filter out log entries returned.
+        /// </para>
+        /// </summary>
+        [Parameter(Mandatory = false, ParameterSetName = ParameterSetNames.NoFilter)]
+        [ValidateNotNullOrEmpty]
+        public string Filter { get; set; }
+
+        /// <summary>
+        /// This dynamic parameter dictionary is used by PowerShell to generate parameters dynamically.
+        /// </summary>
+        private RuntimeDefinedParameterDictionary dynamicParameters;
+
+        /// <summary>
+        /// This function is part of the IDynamicParameters interface.
+        /// PowerShell uses it to generate parameters dynamically.
+        /// </summary>
+        public override object GetDynamicParameters()
+        {
+            if (dynamicParameters == null)
+            {
+                ParameterAttribute paramAttribute = new ParameterAttribute()
+                {
+                    Mandatory = false,
+                    ParameterSetName = ParameterSetNames.NoFilter
+                };
+                ValidateSetAttribute validateSetAttribute = new ValidateSetAttribute(AllResourceTypes);
+                Collection<Attribute> attributes =
+                    new Collection<Attribute>(new Attribute[] { validateSetAttribute, paramAttribute });
+                // This parameter can now be thought of as:
+                // [Parameter(Mandatory = false, ParameterSetName = ParameterSetNames.NoFilter)]
+                // [ValidateSet(validTypeValues)]
+                // public string { get; set; }
+                RuntimeDefinedParameter typeParameter = new RuntimeDefinedParameter("ResourceType", typeof(string), attributes);
+                dynamicParameters = new RuntimeDefinedParameterDictionary();
+                dynamicParameters.Add("ResourceType", typeParameter);
+            }
+
+            return dynamicParameters;
+        }
 
         protected override void ProcessRecord()
         {
             ListLogEntriesRequest logEntriesRequest = new ListLogEntriesRequest();
             // Set resource to "projects/{Project}" so we will only find log entries in project Project.
             logEntriesRequest.ResourceNames = new List<string> { $"projects/{Project}" };
-            if (!string.IsNullOrWhiteSpace(LogName))
+
+            if (ParameterSetName == ParameterSetNames.Filter)
             {
-                LogName = PrefixProject(LogName, Project);
-                // By setting logName = LogName in the filter, the list request
-                // will only return log entry that belongs to LogName.
-                logEntriesRequest.Filter = $"logName = '{LogName}'".Replace('\'', '"');
+                logEntriesRequest.Filter = Filter;
+            }
+            else
+            {
+                string andOp = " AND ";
+                string filterString = "";
+
+                if (!string.IsNullOrWhiteSpace(LogName))
+                {
+                    LogName = PrefixProject(LogName, Project);
+                    // By setting logName = LogName in the filter, the list request
+                    // will only return log entry that belongs to LogName.
+                    filterString = $"logName = '{LogName}'{andOp}".Replace('\'', '"');
+                }
+
+                if (Severity.HasValue)
+                {
+                    string severityString = Enum.GetName(typeof(LogSeverity), Severity.Value);
+                    filterString += $"severity = {severityString}{andOp}";
+                }
+
+                string selectedType = dynamicParameters["ResourceType"].Value?.ToString();
+                if (selectedType != null)
+                {
+                    filterString += $"resource.type = {selectedType}{andOp}".Replace('\'', '"');
+                }
+
+                // Strip the "AND " at the end if we have it.
+                if (filterString.EndsWith(andOp))
+                {
+                    logEntriesRequest.Filter = filterString.Substring(0, filterString.Length - andOp.Length);
+                }
             }
 
             do
@@ -91,58 +312,8 @@ namespace Google.PowerShell.Logging
         {
             public const string TextPayload = "TextPayload";
             public const string JsonPayload = "JsonPayload";
+            public const string ProtoPayload = "ProtoPayload";
             public const string LogEntry = "LogEntry";
-        }
-
-        /// <summary>
-        /// Enum of severity levels for a log entry.
-        /// </summary>
-        public enum LogSeverity
-        {
-            /// <summary>
-            /// The log entry has no assigned severity level.
-            /// </summary>
-            Default,
-
-            /// <summary>
-            /// Debug or trace information.
-            /// </summary>
-            Debug,
-
-            /// <summary>
-            /// Routine information, such as ongoing status or performance.
-            /// </summary>
-            Info,
-
-            /// <summary>
-            /// Normal but significant events, such as start up, shut down, or a configuration change.
-            /// </summary>
-            Notice,
-
-            /// <summary>
-            /// Warning events might cause problems.
-            /// </summary>
-            Warning,
-
-            /// <summary>
-            /// Error events are likely to cause problems.
-            /// </summary>
-            Error,
-
-            /// <summary>
-            /// Critical events cause more severe problems or outages.
-            /// </summary>
-            Critical,
-
-            /// <summary>
-            /// A person must take an action immediately.
-            /// </summary>
-            Alert,
-
-            /// <summary>
-            /// One or more systems are unusable.
-            /// </summary>
-            Emergency
         }
 
         /// <summary>
@@ -163,6 +334,7 @@ namespace Google.PowerShell.Logging
         /// </summary>
         [Parameter(ParameterSetName = ParameterSetNames.TextPayload, Mandatory = true)]
         [Parameter(ParameterSetName = ParameterSetNames.JsonPayload, Mandatory = true)]
+        [Parameter(ParameterSetName = ParameterSetNames.ProtoPayload, Mandatory = true)]
         [Parameter(ParameterSetName = ParameterSetNames.LogEntry, Mandatory = false)]
         public string LogName { get; set; }
 
@@ -183,6 +355,15 @@ namespace Google.PowerShell.Logging
         [Parameter(ParameterSetName = ParameterSetNames.JsonPayload, Mandatory = true, Position = 0, ValueFromPipeline = true)]
         [ValidateNotNullOrEmpty]
         public Hashtable[] JsonPayload { get; set; }
+
+        /// <summary>
+        /// <para type="description">
+        /// The proto payload of the log entry. Each value in the array will be written to a single entry in the log.
+        /// </para>
+        /// </summary>
+        [Parameter(ParameterSetName = ParameterSetNames.ProtoPayload, Mandatory = true)]
+        [ValidateNotNullOrEmpty]
+        public Hashtable[] ProtoPayload { get; set; }
 
         /// <summary>
         /// <para type="description">
@@ -212,8 +393,6 @@ namespace Google.PowerShell.Logging
         [Parameter(Mandatory = false)]
         public MonitoredResource MonitoredResource { get; set; }
 
-        public SwitchParameter PartialSuccess { get; set; }
-
         protected override void ProcessRecord()
         {
             LogName = PrefixProject(LogName, Project);
@@ -227,44 +406,56 @@ namespace Google.PowerShell.Logging
             }
             List<LogEntry> entries = new List<LogEntry>();
 
-            if (ParameterSetName == ParameterSetNames.JsonPayload)
+            switch (ParameterSetName)
             {
-                foreach (Hashtable hashTable in JsonPayload)
-                {
-                    Dictionary<string, object> json =
-                        hashTable.Cast<DictionaryEntry>().ToDictionary(kvp => (string)kvp.Key, kvp => kvp.Value);
-
-                    LogEntry entry = new LogEntry()
+                case ParameterSetNames.TextPayload:
+                    foreach (string text in TextPayload)
                     {
-                        LogName = LogName,
-                        Severity = Enum.GetName(typeof(LogSeverity), Severity),
-                        Resource = MonitoredResource,
-                        JsonPayload = json
-                    };
-                    entries.Add(entry);
-                }
-            }
-            else if (ParameterSetName == ParameterSetNames.LogEntry)
-            {
-                foreach (LogEntry logEntry in LogEntry)
-                {
-                    logEntry.LogName = PrefixProject(logEntry.LogName, Project);
-                }
-                entries = LogEntry.ToList();
-            }
-            else
-            {
-                foreach (string text in TextPayload)
-                {
-                    LogEntry entry = new LogEntry()
+                        LogEntry entry = new LogEntry()
+                        {
+                            LogName = LogName,
+                            Severity = Enum.GetName(typeof(LogSeverity), Severity),
+                            Resource = MonitoredResource,
+                            TextPayload = text
+                        };
+                        entries.Add(entry);
+                    }
+                    break;
+                case ParameterSetNames.ProtoPayload:
+                    foreach (Hashtable hashTable in JsonPayload)
                     {
-                        LogName = LogName,
-                        Severity = Enum.GetName(typeof(LogSeverity), Severity),
-                        Resource = MonitoredResource,
-                        TextPayload = text
-                    };
-                    entries.Add(entry);
-                }
+                        LogEntry entry = new LogEntry()
+                        {
+                            LogName = LogName,
+                            Severity = Enum.GetName(typeof(LogSeverity), Severity),
+                            Resource = MonitoredResource,
+                            JsonPayload = ConvertToDictionary<string, object>(hashTable)
+                        };
+                        entries.Add(entry);
+                    }
+                    break;
+                case ParameterSetNames.JsonPayload:
+                    foreach (Hashtable hashTable in ProtoPayload)
+                    {
+                        LogEntry entry = new LogEntry()
+                        {
+                            LogName = LogName,
+                            Severity = Enum.GetName(typeof(LogSeverity), Severity),
+                            Resource = MonitoredResource,
+                            ProtoPayload = ConvertToDictionary<string, object>(hashTable)
+                        };
+                        entries.Add(entry);
+                    }
+                    break;
+                case ParameterSetNames.LogEntry:
+                    foreach (LogEntry logEntry in LogEntry)
+                    {
+                        logEntry.LogName = PrefixProject(logEntry.LogName, Project);
+                    }
+                    entries = LogEntry.ToList();
+                    break;
+                default:
+                    throw UnknownParameterSetException;
             }
 
             WriteLogEntriesRequest writeRequest = new WriteLogEntriesRequest()
@@ -309,67 +500,39 @@ namespace Google.PowerShell.Logging
     }
 
     [Cmdlet(VerbsCommon.New, "GcLogMonitoredResource")]
-    public class NewGcLogMonitoredResource : GcLogCmdlet, IDynamicParameters
+    public class NewGcLogMonitoredResource : GcLogCmdletWithResourceTypeParameter
     {
+        [Parameter(Mandatory = true)]
+        [ValidateNotNullOrEmpty]
+        public Hashtable Labels { get; set; }
+
         /// <summary>
         /// This dynamic parameter dictionary is used by PowerShell to generate parameters dynamically.
         /// </summary>
         private RuntimeDefinedParameterDictionary dynamicParameters;
 
         /// <summary>
-        /// A cache of the list of valid monitored resource descriptors.
-        /// </summary>
-        private static List<MonitoredResourceDescriptor> s_monitoredResourceDescriptors;
-
-        [Parameter(Mandatory = true)]
-        [ValidateNotNullOrEmpty]
-        public Hashtable Labels { get; set; }
-
-        /// <summary>
-        /// Gets all possible monitored resource descriptors.
-        /// </summary>
-        private List<MonitoredResourceDescriptor> GetResourceDescriptors()
-        {
-            List<MonitoredResourceDescriptor> monitoredResourceDescriptors = new List<MonitoredResourceDescriptor>();
-            MonitoredResourceDescriptorsResource.ListRequest request = Service.MonitoredResourceDescriptors.List();
-            do
-            {
-                ListMonitoredResourceDescriptorsResponse response = request.Execute();
-                if (response.ResourceDescriptors != null)
-                {
-                    monitoredResourceDescriptors.AddRange(response.ResourceDescriptors);
-                }
-                request.PageToken = response.NextPageToken;
-            }
-            while (!Stopping && request.PageToken != null);
-            return monitoredResourceDescriptors;
-        }
-
-        /// <summary>
         /// This function is part of the IDynamicParameters interface.
         /// PowerShell uses it to generate parameters dynamically.
         /// </summary>
-        public object GetDynamicParameters()
+        public override object GetDynamicParameters()
         {
-            if (s_monitoredResourceDescriptors == null)
-            {
-                s_monitoredResourceDescriptors = GetResourceDescriptors();
-            }
-
             if (dynamicParameters == null)
             {
-                ParameterAttribute mandatoryParamAttribute = new ParameterAttribute() { Mandatory = true };
-                string[] validTypeValues = s_monitoredResourceDescriptors.Select(descriptor => descriptor.Type).ToArray();
-                ValidateSetAttribute validateSetAttribute = new ValidateSetAttribute(validTypeValues);
+                ParameterAttribute paramAttribute = new ParameterAttribute()
+                {
+                    Mandatory = true
+                };
+                ValidateSetAttribute validateSetAttribute = new ValidateSetAttribute(AllResourceTypes);
                 Collection<Attribute> attributes =
-                    new Collection<Attribute>(new Attribute[] { mandatoryParamAttribute, validateSetAttribute });
+                    new Collection<Attribute>(new Attribute[] { validateSetAttribute, paramAttribute });
                 // This parameter can now be thought of as:
                 // [Parameter(Mandatory = true)]
                 // [ValidateSet(validTypeValues)]
                 // public string { get; set; }
-                RuntimeDefinedParameter typeParameter = new RuntimeDefinedParameter("Type", typeof(string), attributes);
+                RuntimeDefinedParameter typeParameter = new RuntimeDefinedParameter("ResourceType", typeof(string), attributes);
                 dynamicParameters = new RuntimeDefinedParameterDictionary();
-                dynamicParameters.Add("Type", typeParameter);
+                dynamicParameters.Add("ResourceType", typeParameter);
             }
 
             return dynamicParameters;
@@ -377,9 +540,8 @@ namespace Google.PowerShell.Logging
 
         protected override void ProcessRecord()
         {
-            string selectedType = dynamicParameters["Type"].Value.ToString();
-            MonitoredResourceDescriptor selectedDescriptor = s_monitoredResourceDescriptors.First(
-                descriptor => string.Equals(descriptor.Type.ToLower(), selectedType.ToLower()));
+            string selectedType = dynamicParameters["ResourceType"].Value.ToString();
+            MonitoredResourceDescriptor selectedDescriptor = GetResourceDescriptor(selectedType);
             IEnumerable<string> descriptorLabels = selectedDescriptor.Labels.Select(label => label.Key);
 
             // Validate that the Labels passed in match what is found in the labels of the selected descriptor.
@@ -402,7 +564,7 @@ namespace Google.PowerShell.Logging
             MonitoredResource createdResource = new MonitoredResource()
             {
                 Type = selectedType,
-                Labels = Labels.Cast<DictionaryEntry>().ToDictionary(kvp => (string)kvp.Key, kvp => (string)kvp.Value)
+                Labels = ConvertToDictionary<string, string>(Labels)
             };
             WriteObject(createdResource);
         }
