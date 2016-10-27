@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Management.Automation;
+using System.Xml;
 
 namespace Google.PowerShell.Logging
 {
@@ -92,14 +93,7 @@ namespace Google.PowerShell.Logging
         {
             return hashTable.Cast<DictionaryEntry>().ToDictionary(kvp => (K)kvp.Key, kvp => (V)kvp.Value);
         }
-    }
 
-    /// <summary>
-    /// Base class for cmdlet that has -ResourceType parameter with a validated set of values.
-    /// We initialize and cache this set of values.
-    /// </summary>
-    public abstract class GcLogCmdletWithResourceTypeParameter : GcLogCmdlet, IDynamicParameters
-    {
         /// <summary>
         /// A cache of the list of valid monitored resource descriptors.
         /// This is used for auto-completion to display possible types of monitored resource.
@@ -141,12 +135,6 @@ namespace Google.PowerShell.Logging
         /// Returns all valid resource types.
         /// </summary>
         protected string[] AllResourceTypes => monitoredResourceDescriptors.Value.Select(descriptor => descriptor.Type).ToArray();
-
-        /// <summary>
-        /// This will be implemented by child class.
-        /// This is used by PowerShell to generate the dynamic parameters.
-        /// </summary>
-        public abstract object GetDynamicParameters();
     }
 
     /// <summary>
@@ -157,20 +145,35 @@ namespace Google.PowerShell.Logging
     /// Gets all log entries from a project or gets the entries from a specific log.
     /// </para>
     /// <example>
-    /// <code>PS C:\> Get-GcLogEntry</code>
-    /// <para>This command gets all log entries for the default project.</para>
+    ///   <code>PS C:\> Get-GcLogEntry</code>
+    ///   <para>This command gets all log entries for the default project.</para>
     /// </example>
     /// <example>
-    /// <code>PS C:\> Get-GcLogEntry -LogName "my-log"</code>
-    /// <para>This command gets all the log entries from the log named "my-backendservice".</para>
+    ///   <code>PS C:\> Get-GcLogEntry -LogName "my-log"</code>
+    ///   <para>This command gets all the log entries from the log named "my-backendservice".</para>
+    /// </example>
+    /// <example>
+    ///   <code>PS C:\> Get-GcLogEntry -LogName "my-log"</code>
+    ///   <para>This command gets all the log entries from the log named "my-backendservice".</para>
+    /// </example>
+    /// <example>
+    ///   <code>PS C:\> Get-GcLogEntry -LogName "my-log" -Severity Error</code>
+    ///   <para>This command gets all the log entries with severity ERROR from the log named "my-backendservice".</para>
+    /// </example>
+    /// <example>
+    ///   <code>PS C:\> Get-GcLogEntry -Filter 'resource.type="gce_instance" AND severity >= ERROR'</code>
+    ///   <para>This command gets all the log entries that satisfy filter.</para>
     /// </example>
     /// <para type="link" uri="(https://cloud.google.com/logging/docs/view/logs_index)">
     /// [Log Entries and Logs]
     /// </para>
+    /// <para type="link" uri="(https://cloud.google.com/logging/docs/view/advanced_filters)">
+    /// [Logs Filters]
+    /// </para>
     /// </summary>
     [Cmdlet(VerbsCommon.Get, "GcLogEntry", DefaultParameterSetName = ParameterSetNames.NoFilter)]
     [OutputType(typeof(LogEntry))]
-    public class GetGcLogEntryCmdlet : GcLogCmdletWithResourceTypeParameter
+    public class GetGcLogEntryCmdlet : GcLogCmdlet, IDynamicParameters
     {
         private class ParameterSetNames
         {
@@ -206,6 +209,22 @@ namespace Google.PowerShell.Logging
 
         /// <summary>
         /// <para type="description">
+        /// The cmdlet will only return log entries that occurs before this datetime.
+        /// </para>
+        /// </summary>
+        [Parameter(Mandatory = false, ParameterSetName = ParameterSetNames.NoFilter)]
+        public DateTime? Before { get; set; }
+
+        /// <summary>
+        /// <para type="description">
+        /// The cmdlet will only return log entries that occurs after this datetime.
+        /// </para>
+        /// </summary>
+        [Parameter(Mandatory = false, ParameterSetName = ParameterSetNames.NoFilter)]
+        public DateTime? After { get; set; }
+
+        /// <summary>
+        /// <para type="description">
         /// If specified, the cmdlet will use this to filter out log entries returned.
         /// </para>
         /// </summary>
@@ -222,7 +241,7 @@ namespace Google.PowerShell.Logging
         /// This function is part of the IDynamicParameters interface.
         /// PowerShell uses it to generate parameters dynamically.
         /// </summary>
-        public override object GetDynamicParameters()
+        public object GetDynamicParameters()
         {
             if (dynamicParameters == null)
             {
@@ -266,19 +285,36 @@ namespace Google.PowerShell.Logging
                     LogName = PrefixProject(LogName, Project);
                     // By setting logName = LogName in the filter, the list request
                     // will only return log entry that belongs to LogName.
+                    // Example: logName = "Name of log".
                     filterString = $"logName = '{LogName}'{andOp}".Replace('\'', '"');
                 }
 
                 if (Severity.HasValue)
                 {
-                    string severityString = Enum.GetName(typeof(LogSeverity), Severity.Value);
+                    // Example: severity >= ERROR.
+                    string severityString = Enum.GetName(typeof(LogSeverity), Severity.Value).ToUpper();
                     filterString += $"severity = {severityString}{andOp}";
                 }
 
                 string selectedType = dynamicParameters["ResourceType"].Value?.ToString();
                 if (selectedType != null)
                 {
-                    filterString += $"resource.type = {selectedType}{andOp}".Replace('\'', '"');
+                    // Example: resource.type = "gce_instance".
+                    filterString += $"resource.type = '{selectedType}'{andOp}".Replace('\'', '"');
+                }
+
+                if (Before.HasValue)
+                {
+                    // Example: timestamp <= "2016-06-27T14:40:00-04:00".
+                    string beforeTimestamp = XmlConvert.ToString(Before.Value, XmlDateTimeSerializationMode.Local);
+                    filterString += $"timestamp <= '{beforeTimestamp}'{andOp}".Replace('\'', '"');
+                }
+
+                if (After.HasValue)
+                {
+                    // Example: timestamp >= "2016-06-27T14:40:00-04:00".
+                    string afterTimestamp = XmlConvert.ToString(After.Value, XmlDateTimeSerializationMode.Local);
+                    filterString += $"timestamp >= '{afterTimestamp}'{andOp}".Replace('\'', '"');
                 }
 
                 // Strip the "AND " at the end if we have it.
@@ -305,6 +341,49 @@ namespace Google.PowerShell.Logging
         }
     }
 
+    /// <summary>
+    /// <para type="synopsis">
+    /// Creates new log entries.
+    /// </para>
+    /// <para type="description">
+    /// Creates new log entries in a log. The cmdlet will create the log if it doesn't exist.
+    /// By default, the log is associated with the "global" resource type ("custom.googleapis.com" in v1 service).
+    /// </para>
+    /// <example>
+    ///   <code>PS C:\> New-GcLogEntry -TextPayload "This is a log entry" -LogName "test-log".</code>
+    ///   <para>This command creates a log entry with the specified text payload in the log "test-log".</para>
+    /// </example>
+    /// <example>
+    ///   <code>PS C:\> New-GcLogEntry -TextPayload "Entry 1", "Entry 2" -LogName "test-log".</code>
+    ///   <para>
+    ///   This command creates 2 log entries with text payload "Entry 1" and "Entry 2" respectively in the log "test-log".
+    ///   </para>
+    /// </example>
+    /// <example>
+    ///   <code>PS C:\> New-GcLogEntry -JsonPayload @{"a" = "b"} -LogName "test-log" -Severity Error</code>
+    ///   <para>This command creates a log entry with a json payload and severity level Error in the log "test-log".</para>
+    /// </example>
+    /// <example>
+    ///   <code>PS C:\> New-GcLogEntry -LogEntry @{"LogName" = "test-log", "TextPayload" = "Test"}</code>
+    ///   <para>This command creates a log entry directly from the LogEntry object.</para>
+    /// </example>
+    /// <example>
+    ///   <code>
+    ///   PS C:\> New-GcLogEntry -LogEntry @{"LogName" = "test-log", "TextPayload" = "Test"} `
+    ///                          -MonitoredResource (New-GcLogMonitoredResource -ResourceType @{"project_id" = "my-project"}
+    ///   </code>
+    ///   <para>
+    ///   This command creates a log entry directly from the LogEntry object.
+    ///   The command also associates it with a resource type created from New-GcLogMonitoredResource
+    ///   </para>
+    /// </example>
+    /// <para type="link" uri="(https://cloud.google.com/logging/docs/view/logs_index)">
+    /// [Log Entries and Logs]
+    /// </para>
+    /// <para type="link" uri="(https://cloud.google.com/logging/docs/api/v2/resource-list)">
+    /// [Monitored Resources]
+    /// </para>
+    /// </summary>
     [Cmdlet(VerbsCommon.New, "GcLogEntry", DefaultParameterSetName = ParameterSetNames.TextPayload)]
     public class NewGcLogEntryCmdlet : GcLogCmdlet
     {
@@ -332,10 +411,10 @@ namespace Google.PowerShell.Logging
         /// If the log does not exist, it will be created.
         /// </para>
         /// </summary>
-        [Parameter(ParameterSetName = ParameterSetNames.TextPayload, Mandatory = true)]
-        [Parameter(ParameterSetName = ParameterSetNames.JsonPayload, Mandatory = true)]
-        [Parameter(ParameterSetName = ParameterSetNames.ProtoPayload, Mandatory = true)]
-        [Parameter(ParameterSetName = ParameterSetNames.LogEntry, Mandatory = false)]
+        [Parameter(ParameterSetName = ParameterSetNames.TextPayload, Position =0, Mandatory = true)]
+        [Parameter(ParameterSetName = ParameterSetNames.JsonPayload, Position = 0, Mandatory = true)]
+        [Parameter(ParameterSetName = ParameterSetNames.ProtoPayload, Position = 0, Mandatory = true)]
+        [Parameter(ParameterSetName = ParameterSetNames.LogEntry, Position = 0, Mandatory = false)]
         public string LogName { get; set; }
 
         /// <summary>
@@ -343,7 +422,7 @@ namespace Google.PowerShell.Logging
         /// The text payload of the log entry. Each value in the array will be written to a single entry in the log.
         /// </para> 
         /// </summary>
-        [Parameter(ParameterSetName = ParameterSetNames.TextPayload, Mandatory = true, Position = 0, ValueFromPipeline = true)]
+        [Parameter(ParameterSetName = ParameterSetNames.TextPayload, Mandatory = true, ValueFromPipeline = true)]
         [ValidateNotNullOrEmpty]
         public string[] TextPayload { get; set; }
 
@@ -352,7 +431,7 @@ namespace Google.PowerShell.Logging
         /// The JSON payload of the log entry. Each value in the array will be written to a single entry in the log.
         /// </para>
         /// </summary>
-        [Parameter(ParameterSetName = ParameterSetNames.JsonPayload, Mandatory = true, Position = 0, ValueFromPipeline = true)]
+        [Parameter(ParameterSetName = ParameterSetNames.JsonPayload, Mandatory = true, ValueFromPipeline = true)]
         [ValidateNotNullOrEmpty]
         public Hashtable[] JsonPayload { get; set; }
 
@@ -469,6 +548,25 @@ namespace Google.PowerShell.Logging
         }
     }
 
+    /// <summary>
+    /// <para type="synopsis">
+    /// Remove logs.
+    /// </para>
+    /// <para type="description">
+    /// Removes a log by its name
+    /// </para>
+    /// <example>
+    ///   <code>PS C:\> Remove-GcLog -LogName "test-log".</code>
+    ///   <para>This command removes "test-log" from the default project.</para>
+    /// </example>
+    /// <example>
+    ///   <code>PS C:\> Remove-GcLog -LogName "test-log" -Project "my-project".</code>
+    ///   <para>This command removes "test-log" from project "my-project".</para>
+    /// </example>
+    /// <para type="link" uri="(https://cloud.google.com/logging/docs/view/logs_index)">
+    /// [Log Entries and Logs]
+    /// </para>
+    /// </summary>
     [Cmdlet(VerbsCommon.Remove, "GcLog")]
     public class RemoveGcLogCmdlet : GcLogCmdlet
     {
@@ -499,8 +597,26 @@ namespace Google.PowerShell.Logging
         }
     }
 
+    /// <summary>
+    /// <para type="synopsis">
+    /// Creates new monitored resources.
+    /// </para>
+    /// <para type="description">
+    /// Creates new monitored resources. These resources are used in the Logging cmdlets such as New-GcLogEntry
+    /// </para>
+    /// <example>
+    ///   <code>
+    ///   PS C:\> New-GcLogMonitoredResource -ResourceType gce_instance `
+    ///                                      -Labels @{"project_id" = "my-project"; "instance_id" = "my-instance"}.
+    ///   </code>
+    ///   <para>This command creates a new monitored resource of type gce_instance with specified labels.</para>
+    /// </example>
+    /// <para type="link" uri="(https://cloud.google.com/logging/docs/api/v2/resource-list)">
+    /// [Monitored Resources and Labels]
+    /// </para>
+    /// </summary>
     [Cmdlet(VerbsCommon.New, "GcLogMonitoredResource")]
-    public class NewGcLogMonitoredResource : GcLogCmdletWithResourceTypeParameter
+    public class NewGcLogMonitoredResource : GcLogCmdlet, IDynamicParameters
     {
         [Parameter(Mandatory = true)]
         [ValidateNotNullOrEmpty]
@@ -515,7 +631,7 @@ namespace Google.PowerShell.Logging
         /// This function is part of the IDynamicParameters interface.
         /// PowerShell uses it to generate parameters dynamically.
         /// </summary>
-        public override object GetDynamicParameters()
+        public object GetDynamicParameters()
         {
             if (dynamicParameters == null)
             {
