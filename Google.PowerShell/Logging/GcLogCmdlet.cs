@@ -12,61 +12,61 @@ using System.Xml;
 namespace Google.PowerShell.Logging
 {
     /// <summary>
-    /// Enum of severity levels for a log entry.
-    /// </summary>
-    public enum LogSeverity
-    {
-        /// <summary>
-        /// The log entry has no assigned severity level.
-        /// </summary>
-        Default,
-
-        /// <summary>
-        /// Debug or trace information.
-        /// </summary>
-        Debug,
-
-        /// <summary>
-        /// Routine information, such as ongoing status or performance.
-        /// </summary>
-        Info,
-
-        /// <summary>
-        /// Normal but significant events, such as start up, shut down, or a configuration change.
-        /// </summary>
-        Notice,
-
-        /// <summary>
-        /// Warning events might cause problems.
-        /// </summary>
-        Warning,
-
-        /// <summary>
-        /// Error events are likely to cause problems.
-        /// </summary>
-        Error,
-
-        /// <summary>
-        /// Critical events cause more severe problems or outages.
-        /// </summary>
-        Critical,
-
-        /// <summary>
-        /// A person must take an action immediately.
-        /// </summary>
-        Alert,
-
-        /// <summary>
-        /// One or more systems are unusable.
-        /// </summary>
-        Emergency
-    }
-
-    /// <summary>
     /// Base class for Stackdriver Logging cmdlets.
     /// </summary>
     public class GcLogCmdlet : GCloudCmdlet
     {
+        /// <summary>
+        /// Enum of severity levels for a log entry.
+        /// </summary>
+        public enum LogSeverity
+        {
+            /// <summary>
+            /// The log entry has no assigned severity level.
+            /// </summary>
+            Default,
+
+            /// <summary>
+            /// Debug or trace information.
+            /// </summary>
+            Debug,
+
+            /// <summary>
+            /// Routine information, such as ongoing status or performance.
+            /// </summary>
+            Info,
+
+            /// <summary>
+            /// Normal but significant events, such as start up, shut down, or a configuration change.
+            /// </summary>
+            Notice,
+
+            /// <summary>
+            /// Warning events might cause problems.
+            /// </summary>
+            Warning,
+
+            /// <summary>
+            /// Error events are likely to cause problems.
+            /// </summary>
+            Error,
+
+            /// <summary>
+            /// Critical events cause more severe problems or outages.
+            /// </summary>
+            Critical,
+
+            /// <summary>
+            /// A person must take an action immediately.
+            /// </summary>
+            Alert,
+
+            /// <summary>
+            /// One or more systems are unusable.
+            /// </summary>
+            Emergency
+        }
+
         public LoggingService Service { get; private set; }
 
         public GcLogCmdlet()
@@ -143,10 +143,16 @@ namespace Google.PowerShell.Logging
     /// </para>
     /// <para type="description">
     /// Gets all log entries from a project or gets the entries from a specific log.
+    /// Log entries can be filtered using -LogName, -Severity, -After or -Before parameter.
+    /// For advanced filtering, please use -Filter parameter.
     /// </para>
     /// <example>
     ///   <code>PS C:\> Get-GcLogEntry</code>
     ///   <para>This command gets all log entries for the default project.</para>
+    /// </example>
+    /// <example>
+    ///   <code>PS C:\> Get-GcLogEntry -Project "my-project"</code>
+    ///   <para>This command gets all log entries from the project "my-project".</para>
     /// </example>
     /// <example>
     ///   <code>PS C:\> Get-GcLogEntry -LogName "my-log"</code>
@@ -228,7 +234,7 @@ namespace Google.PowerShell.Logging
         /// If specified, the cmdlet will use this to filter out log entries returned.
         /// </para>
         /// </summary>
-        [Parameter(Mandatory = false, ParameterSetName = ParameterSetNames.NoFilter)]
+        [Parameter(Mandatory = false, ParameterSetName = ParameterSetNames.Filter)]
         [ValidateNotNullOrEmpty]
         public string Filter { get; set; }
 
@@ -251,6 +257,7 @@ namespace Google.PowerShell.Logging
                     ParameterSetName = ParameterSetNames.NoFilter
                 };
                 ValidateSetAttribute validateSetAttribute = new ValidateSetAttribute(AllResourceTypes);
+                validateSetAttribute.IgnoreCase = true;
                 Collection<Attribute> attributes =
                     new Collection<Attribute>(new Attribute[] { validateSetAttribute, paramAttribute });
                 // This parameter can now be thought of as:
@@ -640,6 +647,7 @@ namespace Google.PowerShell.Logging
                     Mandatory = true
                 };
                 ValidateSetAttribute validateSetAttribute = new ValidateSetAttribute(AllResourceTypes);
+                validateSetAttribute.IgnoreCase = true;
                 Collection<Attribute> attributes =
                     new Collection<Attribute>(new Attribute[] { validateSetAttribute, paramAttribute });
                 // This parameter can now be thought of as:
