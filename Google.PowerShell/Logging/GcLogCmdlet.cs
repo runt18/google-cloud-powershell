@@ -357,7 +357,7 @@ namespace Google.PowerShell.Logging
     /// By default, the log is associated with the "global" resource type ("custom.googleapis.com" in v1 service).
     /// </para>
     /// <example>
-    ///   <code>PS C:\> New-GcLogEntry -TextPayload "This is a log entry" -LogName "test-log".</code>
+    ///   <code>PS C:\> New-GcLogEntry -TextPayload "This is a log entry." -LogName "test-log".</code>
     ///   <para>This command creates a log entry with the specified text payload in the log "test-log".</para>
     /// </example>
     /// <example>
@@ -371,13 +371,9 @@ namespace Google.PowerShell.Logging
     ///   <para>This command creates a log entry with a json payload and severity level Error in the log "test-log".</para>
     /// </example>
     /// <example>
-    ///   <code>PS C:\> New-GcLogEntry -LogEntry @{"LogName" = "test-log", "TextPayload" = "Test"}</code>
-    ///   <para>This command creates a log entry directly from the LogEntry object.</para>
-    /// </example>
-    /// <example>
     ///   <code>
-    ///   PS C:\> New-GcLogEntry -LogEntry @{"LogName" = "test-log", "TextPayload" = "Test"} `
-    ///                          -MonitoredResource (New-GcLogMonitoredResource -ResourceType @{"project_id" = "my-project"}
+    ///   PS C:\> New-GcLogEntry -MonitoredResource (New-GcLogMonitoredResource -ResourceType @{"project_id" = "my-project"} `
+    ///                          -TextPayload "This is a log entry."
     ///   </code>
     ///   <para>
     ///   This command creates a log entry directly from the LogEntry object.
@@ -399,7 +395,6 @@ namespace Google.PowerShell.Logging
             public const string TextPayload = "TextPayload";
             public const string JsonPayload = "JsonPayload";
             public const string ProtoPayload = "ProtoPayload";
-            public const string LogEntry = "LogEntry";
         }
 
         /// <summary>
@@ -418,10 +413,7 @@ namespace Google.PowerShell.Logging
         /// If the log does not exist, it will be created.
         /// </para>
         /// </summary>
-        [Parameter(ParameterSetName = ParameterSetNames.TextPayload, Position =0, Mandatory = true)]
-        [Parameter(ParameterSetName = ParameterSetNames.JsonPayload, Position = 0, Mandatory = true)]
-        [Parameter(ParameterSetName = ParameterSetNames.ProtoPayload, Position = 0, Mandatory = true)]
-        [Parameter(ParameterSetName = ParameterSetNames.LogEntry, Position = 0, Mandatory = false)]
+        [Parameter(Position =0, Mandatory = true)]
         public string LogName { get; set; }
 
         /// <summary>
@@ -450,15 +442,6 @@ namespace Google.PowerShell.Logging
         [Parameter(ParameterSetName = ParameterSetNames.ProtoPayload, Mandatory = true)]
         [ValidateNotNullOrEmpty]
         public Hashtable[] ProtoPayload { get; set; }
-
-        /// <summary>
-        /// <para type="description">
-        /// Log entries to be written to the log.
-        /// </para>
-        /// </summary>
-        [Parameter(ParameterSetName = ParameterSetNames.LogEntry, Mandatory = true)]
-        [ValidateNotNullOrEmpty]
-        public LogEntry[] LogEntry { get; set; }
 
         /// <summary>
         /// <para type="description">
@@ -508,19 +491,6 @@ namespace Google.PowerShell.Logging
                     }
                     break;
                 case ParameterSetNames.ProtoPayload:
-                    foreach (Hashtable hashTable in JsonPayload)
-                    {
-                        LogEntry entry = new LogEntry()
-                        {
-                            LogName = LogName,
-                            Severity = Enum.GetName(typeof(LogSeverity), Severity),
-                            Resource = MonitoredResource,
-                            JsonPayload = ConvertToDictionary<string, object>(hashTable)
-                        };
-                        entries.Add(entry);
-                    }
-                    break;
-                case ParameterSetNames.JsonPayload:
                     foreach (Hashtable hashTable in ProtoPayload)
                     {
                         LogEntry entry = new LogEntry()
@@ -533,12 +503,18 @@ namespace Google.PowerShell.Logging
                         entries.Add(entry);
                     }
                     break;
-                case ParameterSetNames.LogEntry:
-                    foreach (LogEntry logEntry in LogEntry)
+                case ParameterSetNames.JsonPayload:
+                    foreach (Hashtable hashTable in JsonPayload)
                     {
-                        logEntry.LogName = PrefixProject(logEntry.LogName, Project);
+                        LogEntry entry = new LogEntry()
+                        {
+                            LogName = LogName,
+                            Severity = Enum.GetName(typeof(LogSeverity), Severity),
+                            Resource = MonitoredResource,
+                            JsonPayload = ConvertToDictionary<string, object>(hashTable)
+                        };
+                        entries.Add(entry);
                     }
-                    entries = LogEntry.ToList();
                     break;
                 default:
                     throw UnknownParameterSetException;
